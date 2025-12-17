@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yeast Respiration Simulation - Zero on Ruler</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            user-select: none;
+        }
+        
+        .lab-bench {
+            display: grid;
+            grid-template-columns: 250px 500px 250px;
+            gap: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .panel {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+
+        canvas {
+            background: #fff;
+            border-bottom: 4px solid #888;
+            cursor: crosshair;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* Controls */
+        label { display: block; margin-top: 15px; font-weight: bold; font-size: 0.9em; }
+        input[type=range] { width: 100%; margin-top: 5px; }
+        .value-display { float: right; color: #007bff; }
+        
+        .constants-box {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+            padding: 8px;
+            font-size: 0.85em;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        
+        button {
+            flex: 1;
+            padding: 10px;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        .btn-start { background-color: #28a745; }
+        .btn-start:hover { background-color: #218838; }
+        .btn-start:disabled { background-color: #94d3a2; cursor: not-allowed; }
+
+        .btn-reset { background-color: #dc3545; }
+        .btn-reset:hover { background-color: #c82333; }
+
+        .data-readout {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1.5em;
+            margin-top: 10px;
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+            background: #fff;
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        
+        .status-msg {
+            text-align: center;
+            color: #e53e3e;
+            font-weight: bold;
+            font-size: 0.9em;
+            min-height: 1.2em;
+            margin-top: 5px;
+        }
+
+        .instruction-note {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 15px;
+            background: #e2e8f0;
+            padding: 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Yeast Respiration Simulation</h2>
+
+    <div class="lab-bench">
+        <div class="panel">
+            <h3>Variables</h3>
+            
+            <div class="constants-box">
+                <strong>Controlled:</strong><br>
+                • 7g Yeast<br>
+                • 200ml Water
+            </div>
+
+            <label>
+                Sugar (g)
+                <span id="sugarVal" class="value-display">10g</span>
+            </label>
+            <input type="range" id="sugarInput" min="0" max="25" value="10" step="5">
+
+            <label>
+                Temperature (°C)
+                <span id="tempVal" class="value-display">35°C</span>
+            </label>
+            <input type="range" id="tempInput" min="20" max="50" value="35" step="1">
+
+            <div class="btn-group">
+                <button id="startBtn" class="btn-start" onclick="startExperiment()">Start</button>
+                <button class="btn-reset" onclick="resetExperiment()">Reset</button>
+            </div>
+        </div>
+
+        <div class="panel" style="display:flex; justify-content:center; align-items:flex-end;">
+            <canvas id="simCanvas" width="400" height="600"></canvas>
+        </div>
+
+        <div class="panel">
+            <h3>Live Data</h3>
+            <div id="timerDisplay" class="data-readout">00:00</div>
+            <div id="statusMsg" class="status-msg"></div>
+            
+            <div class="instruction-note">
+                <strong>Instructions:</strong><br>
+                1. Select Sugar amount.<br>
+                2. Click Start.<br>
+                3. Wait for timer to stop at 01:00.<br>
+                4. Drag ruler to measure diameter.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Inputs
+        const sugarInput = document.getElementById('sugarInput');
+        const tempInput = document.getElementById('tempInput');
+        const startBtn = document.getElementById('startBtn');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const statusMsg = document.getElementById('statusMsg');
+        
+        let isRunning = false;
+        let animationId = null;
+        let timeElapsed = 0; 
+        let balloonRadius = 0; 
+        
+        // --- DRAWING CONSTANTS ---
+        const PIXELS_PER_CM = 10;
+        const BASE_RADIUS_PX = 12;
+        
+        // Target: 23cm diameter = 11.5cm radius = 115px
+        const TARGET_RADIUS_PX = 115;
+        const GROWTH_NEEDED_PX = TARGET_RADIUS_PX - BASE_RADIUS_PX;
+        const MAX_GROWTH_SPEED = GROWTH_NEEDED_PX / 60; 
+
+        // Canvas Layout
+        const BOTTLE_BASE_Y = 550; 
+        const BOTTLE_HEIGHT = 200;
+        const BOTTLE_NECK_Y = BOTTLE_BASE_Y - BOTTLE_HEIGHT; // 350
+        
+        sugarInput.oninput = function() { 
+            document.getElementById('sugarVal').innerText = this.value + "g"; 
+        };
+        tempInput.oninput = function() { 
+            document.getElementById('tempVal').innerText = this.value + "°C"; 
+        };
+
+        // --- RULER STATE ---
+        let ruler = {
+            x: 20, y: 50, width: 40, height: 350,
+            isDragging: false, dragOffsetX: 0, dragOffsetY: 0
+        };
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            if (mouseX >= ruler.x && mouseX <= ruler.x + ruler.width &&
+                mouseY >= ruler.y && mouseY <= ruler.y + ruler.height) {
+                ruler.isDragging = true;
+                ruler.dragOffsetX = mouseX - ruler.x;
+                ruler.dragOffsetY = mouseY - ruler.y;
+            }
+        });
+        canvas.addEventListener('mousemove', (e) => {
+            if (ruler.isDragging) {
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                ruler.x = mouseX - ruler.dragOffsetX;
+                ruler.y = mouseY - ruler.dragOffsetY;
+                if (!isRunning) drawScene(); 
+            }
+        });
+        canvas.addEventListener('mouseup', () => ruler.isDragging = false);
+        canvas.addEventListener('mouseout', () => ruler.isDragging = false);
+
+        // --- PHYSICS ENGINE ---
+        const SUGAR_RATES = {
+            "0": 0.0, "5": 0.20, "10": 1.0, "15": 0.95, "20": 0.80, "25": 0.78
+        };
+
+        function startExperiment() {
+            if (isRunning) return;
+            isRunning = true;
+            statusMsg.innerText = "Running...";
+            startBtn.disabled = true;
+            sugarInput.disabled = true;
+            tempInput.disabled = true;
+            lastTime = Date.now();
+            animate();
+        }
+
+        function resetExperiment() {
+            isRunning = false;
+            cancelAnimationFrame(animationId);
+            startBtn.disabled = false;
+            sugarInput.disabled = false;
+            tempInput.disabled = false;
+            timeElapsed = 0;
+            balloonRadius = 0;
+            timerDisplay.innerText = "00:00";
+            statusMsg.innerText = "";
+            drawScene();
+        }
+
+        let lastTime = 0;
+
+        function animate() {
+            if (!isRunning) return;
+
+            const now = Date.now();
+            const dt = (now - lastTime) / 1000; 
+            lastTime = now;
+
+            timeElapsed += dt;
+
+            // Stop at 60s
+            if (timeElapsed >= 60) {
+                timeElapsed = 60;
+                isRunning = false;
+                statusMsg.innerText = "Stopped (1 min)";
+                updatePhysics(0); 
+                updateTimerDisplay(60);
+                drawScene();
+                return;
+            }
+
+            updateTimerDisplay(timeElapsed);
+            updatePhysics(dt);
+            drawScene();
+            animationId = requestAnimationFrame(animate);
+        }
+
+        function updatePhysics(dt) {
+            const sugarVal = sugarInput.value; 
+            const tempVal = parseFloat(tempInput.value);
+
+            let relativeRate = SUGAR_RATES[sugarVal] || 0;
+            let tempFactor = 0;
+            if (tempVal <= 55) {
+                let t = (tempVal - 35) / 35; 
+                tempFactor = 1 - (t * t); 
+                if (tempFactor < 0) tempFactor = 0;
+            }
+
+            let pixelsToAdd = relativeRate * tempFactor * MAX_GROWTH_SPEED * dt;
+            balloonRadius += pixelsToAdd;
+        }
+
+        function updateTimerDisplay(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            timerDisplay.innerText = 
+                (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+        }
+
+        // --- DRAWING ---
+
+        function drawRuler() {
+            ctx.save();
+            ctx.translate(ruler.x, ruler.y);
+            
+            ctx.fillStyle = "#f6e05e"; 
+            ctx.strokeStyle = "#d69e2e";
+            ctx.fillRect(0, 0, ruler.width, ruler.height);
+            ctx.strokeRect(0, 0, ruler.width, ruler.height);
+            
+            ctx.fillStyle = "#000";
+            ctx.font = "10px Arial";
+            ctx.textAlign = "left";
+            
+            for (let i = 0; i < ruler.height; i += PIXELS_PER_CM) { 
+                let tickLen = 5;
+                if (i % 50 === 0) tickLen = 15; 
+                else if (i % 10 === 0) tickLen = 8; 
+                
+                ctx.beginPath();
+                ctx.moveTo(0, i);
+                ctx.lineTo(tickLen, i);
+                ctx.stroke();
+                
+                // Numbers every 5 cm (including 0 now)
+                if (i % 50 === 0) {
+                    // Adjust baseline so 0 sits below the line, others sit middle
+                    if (i === 0) {
+                        ctx.textBaseline = "top";
+                        ctx.fillText(i/PIXELS_PER_CM, 18, i + 2);
+                    } else {
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(i/PIXELS_PER_CM, 18, i);
+                    }
+                }
+            }
+            
+            // Draw 'cm' at bottom
+            ctx.textBaseline = "bottom";
+            ctx.fillText("cm", 15, ruler.height - 5);
+            
+            ctx.restore();
+        }
+
+        function drawScene() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const centerX = canvas.width / 2;
+            
+            const r = BASE_RADIUS_PX + balloonRadius;
+
+            // 1. Balloon
+            const cy = BOTTLE_NECK_Y - r + 8; 
+
+            ctx.beginPath();
+            ctx.fillStyle = "#e53e3e"; 
+            ctx.arc(centerX, cy, r, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Balloon Knot
+            ctx.fillStyle = "#c53030";
+            ctx.fillRect(centerX - 12, BOTTLE_NECK_Y - 10, 24, 20);
+
+            // 2. Bottle Glass
+            ctx.beginPath();
+            ctx.strokeStyle = "#a0aec0";
+            ctx.lineWidth = 3;
+            ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+            
+            ctx.moveTo(centerX - 20, BOTTLE_NECK_Y);
+            ctx.lineTo(centerX - 20, BOTTLE_BASE_Y - 100);
+            ctx.lineTo(centerX - 80, BOTTLE_BASE_Y);
+            ctx.lineTo(centerX + 80, BOTTLE_BASE_Y);
+            ctx.lineTo(centerX + 20, BOTTLE_BASE_Y - 100);
+            ctx.lineTo(centerX + 20, BOTTLE_NECK_Y);
+            ctx.stroke();
+            ctx.fill();
+
+            // 3. Liquid
+            ctx.beginPath();
+            ctx.fillStyle = "#ecc94b"; 
+            ctx.moveTo(centerX - 20, BOTTLE_BASE_Y - 100);
+            ctx.lineTo(centerX - 80, BOTTLE_BASE_Y);
+            ctx.lineTo(centerX + 80, BOTTLE_BASE_Y);
+            ctx.lineTo(centerX + 20, BOTTLE_BASE_Y - 100);
+            ctx.fill();
+            
+            // 4. Bubbles
+            if (isRunning && sugarInput.value > 0) {
+                ctx.fillStyle = "rgba(255,255,255,0.6)";
+                if(Math.random() > 0.5) {
+                   for(let i=0; i<3; i++) {
+                       let bx = centerX + (Math.random()*100 - 50);
+                       let by = BOTTLE_BASE_Y - (Math.random()*80);
+                       ctx.beginPath();
+                       ctx.arc(bx, by, Math.random()*4, 0, Math.PI*2);
+                       ctx.fill();
+                   }
+                }
+            }
+
+            // 5. Ruler
+            drawRuler();
+        }
+
+        drawScene(); 
+
+    </script>
+</body>
+</html>
