@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yeast Respiration Simulation - Zero on Ruler</title>
+    <title>Yeast Respiration Simulation - Final (Touch Supported)</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -13,6 +13,8 @@
             align-items: center;
             padding: 20px;
             user-select: none;
+            /* Prevent page scrolling while dragging on touch devices */
+            touch-action: none; 
         }
         
         .lab-bench {
@@ -37,6 +39,8 @@
             border-bottom: 4px solid #888;
             cursor: crosshair;
             box-shadow: inset 0 0 20px rgba(0,0,0,0.05);
+            /* Ensure canvas receives touch events correctly */
+            touch-action: none;
         }
 
         /* Controls */
@@ -100,6 +104,12 @@
             background: #e2e8f0;
             padding: 8px;
             border-radius: 4px;
+        }
+        
+        /* Responsive adjustments for smaller screens if needed later */
+        @media (max-width: 1024px) {
+             .lab-bench { grid-template-columns: 1fr; justify-items: center; }
+             .panel { width: 100%; max-width: 500px; }
         }
     </style>
 </head>
@@ -173,8 +183,6 @@
         // --- DRAWING CONSTANTS ---
         const PIXELS_PER_CM = 10;
         const BASE_RADIUS_PX = 12;
-        
-        // Target: 23cm diameter = 11.5cm radius = 115px
         const TARGET_RADIUS_PX = 115;
         const GROWTH_NEEDED_PX = TARGET_RADIUS_PX - BASE_RADIUS_PX;
         const MAX_GROWTH_SPEED = GROWTH_NEEDED_PX / 60; 
@@ -182,7 +190,7 @@
         // Canvas Layout
         const BOTTLE_BASE_Y = 550; 
         const BOTTLE_HEIGHT = 200;
-        const BOTTLE_NECK_Y = BOTTLE_BASE_Y - BOTTLE_HEIGHT; // 350
+        const BOTTLE_NECK_Y = BOTTLE_BASE_Y - BOTTLE_HEIGHT; 
         
         sugarInput.oninput = function() { 
             document.getElementById('sugarVal').innerText = this.value + "g"; 
@@ -197,29 +205,74 @@
             isDragging: false, dragOffsetX: 0, dragOffsetY: 0
         };
 
-        canvas.addEventListener('mousedown', (e) => {
+
+        // --- UNIFIED INPUT HANDLING (MOUSE & TOUCH) ---
+
+        // Helper to get correct coordinates from either mouse or touch events
+        function getInputCoordinates(e) {
             const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            if (mouseX >= ruler.x && mouseX <= ruler.x + ruler.width &&
-                mouseY >= ruler.y && mouseY <= ruler.y + ruler.height) {
-                ruler.isDragging = true;
-                ruler.dragOffsetX = mouseX - ruler.x;
-                ruler.dragOffsetY = mouseY - ruler.y;
+            let clientX, clientY;
+
+            if (e.touches && e.touches.length > 0) {
+                // Touch event
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                // Mouse event
+                clientX = e.clientX;
+                clientY = e.clientY;
             }
-        });
-        canvas.addEventListener('mousemove', (e) => {
+
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        function handleStart(e) {
+            const pos = getInputCoordinates(e);
+            
+            if (pos.x >= ruler.x && pos.x <= ruler.x + ruler.width &&
+                pos.y >= ruler.y && pos.y <= ruler.y + ruler.height) {
+                
+                // Prevent default browser scrolling on touch devices if hitting the ruler
+                if (e.cancelable) e.preventDefault();
+                
+                ruler.isDragging = true;
+                ruler.dragOffsetX = pos.x - ruler.x;
+                ruler.dragOffsetY = pos.y - ruler.y;
+            }
+        }
+
+        function handleMove(e) {
             if (ruler.isDragging) {
-                const rect = canvas.getBoundingClientRect();
-                const mouseX = e.clientX - rect.left;
-                const mouseY = e.clientY - rect.top;
-                ruler.x = mouseX - ruler.dragOffsetX;
-                ruler.y = mouseY - ruler.dragOffsetY;
+                // Prevent default browser scrolling while dragging
+                if (e.cancelable) e.preventDefault();
+
+                const pos = getInputCoordinates(e);
+                ruler.x = pos.x - ruler.dragOffsetX;
+                ruler.y = pos.y - ruler.dragOffsetY;
                 if (!isRunning) drawScene(); 
             }
-        });
-        canvas.addEventListener('mouseup', () => ruler.isDragging = false);
-        canvas.addEventListener('mouseout', () => ruler.isDragging = false);
+        }
+
+        function handleEnd(e) {
+            ruler.isDragging = false;
+        }
+
+        // Attach Mouse Listeners (PC)
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mousemove', handleMove);
+        canvas.addEventListener('mouseup', handleEnd);
+        canvas.addEventListener('mouseout', handleEnd);
+
+        // Attach Touch Listeners (iPad/Mobile)
+        // passive: false is required to allow preventDefault() to stop scrolling
+        canvas.addEventListener('touchstart', handleStart, { passive: false });
+        canvas.addEventListener('touchmove', handleMove, { passive: false });
+        canvas.addEventListener('touchend', handleEnd);
+        canvas.addEventListener('touchcancel', handleEnd);
+
 
         // --- PHYSICS ENGINE ---
         const SUGAR_RATES = {
@@ -261,7 +314,6 @@
 
             timeElapsed += dt;
 
-            // Stop at 60s
             if (timeElapsed >= 60) {
                 timeElapsed = 60;
                 isRunning = false;
@@ -326,9 +378,7 @@
                 ctx.lineTo(tickLen, i);
                 ctx.stroke();
                 
-                // Numbers every 5 cm (including 0 now)
                 if (i % 50 === 0) {
-                    // Adjust baseline so 0 sits below the line, others sit middle
                     if (i === 0) {
                         ctx.textBaseline = "top";
                         ctx.fillText(i/PIXELS_PER_CM, 18, i + 2);
@@ -339,7 +389,6 @@
                 }
             }
             
-            // Draw 'cm' at bottom
             ctx.textBaseline = "bottom";
             ctx.fillText("cm", 15, ruler.height - 5);
             
